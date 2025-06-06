@@ -3,3 +3,5 @@
 /target
 /.lsp
 /.clj-kondo
+*.log
+.server_pids
