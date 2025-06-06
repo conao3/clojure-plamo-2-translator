@@ -10,6 +10,10 @@
 
 (def ^:private server-processes (atom {}))
 
+(defn- log-stderr [& messages]
+  (binding [*out* *err*]
+    (println (apply str messages))))
+
 (defn- wait-for-server [url max-attempts]
   (loop [attempts 0]
     (if (>= attempts max-attempts)
@@ -42,21 +46,21 @@
         _ (.redirectOutput pb (ProcessBuilder$Redirect/to log-file))
         process (.start pb)]
     (swap! server-processes assoc port process)
-    (println (str "Starting server on port " port "..."))
+    (log-stderr "Starting server on port " port "...")
     (Thread/sleep 2000)
     (if (.isAlive process)
       (do
-        (println (str "Server process started on port " port))
-        (println (str "Waiting for server to be ready on port " port "..."))
+        (log-stderr "Server process started on port " port)
+        (log-stderr "Waiting for server to be ready on port " port "...")
         (if (wait-for-server (str "http://localhost:" port) 30)
-          (println (str "Server ready on port " port))
+          (log-stderr "Server ready on port " port)
           (throw (ex-info "Server failed to respond" {:port port}))))
       (throw (ex-info "Failed to start server" {:port port})))
     process))
 
 (defn- stop-translation-servers []
   (doseq [[port process] @server-processes]
-    (println (str "Stopping server on port " port "..."))
+    (log-stderr "Stopping server on port " port "...")
     (.destroy process)
     (.waitFor process))
   (reset! server-processes {}))
@@ -89,10 +93,6 @@
     (when (not (str/blank? @current-chunk))
       (swap! chunks conj @current-chunk))
     (vec @chunks)))
-
-(defn- log-stderr [& messages]
-  (binding [*out* *err*]
-    (println (apply str messages))))
 
 (defn- translate-chunk [server-url text idx total]
   (log-stderr "[" (inc idx) "/" total "] Translating " (count text) " characters with " server-url)
@@ -150,7 +150,7 @@
   (.addShutdownHook (Runtime/getRuntime)
                     (Thread. (fn []
                                (stop-translation-servers)
-                               (println "\nServers stopped.")))))
+                               (log-stderr "\nServers stopped.")))))
 
 (def cli-options
   [["-s" "--server URL" "Translation server URL"
@@ -178,14 +178,14 @@
     (cond
       (:help options)
       (do
-        (println "Usage: plamo-2-translator [options]")
-        (println summary)
+        (log-stderr "Usage: plamo-2-translator [options]")
+        (log-stderr summary)
         (System/exit 0))
 
       errors
       (do
         (doseq [err errors]
-          (println err))
+          (log-stderr err))
         (System/exit 1))
 
       :else
@@ -197,7 +197,7 @@
 
                             (:start-servers options)
                             (do
-                              (println "Starting translation servers...")
+                              (log-stderr "Starting translation servers...")
                               (let [ports (map #(+ (:base-port options) %)
                                                (range (:parallel options)))]
                                 (doseq [port ports]
@@ -215,6 +215,13 @@
               _ (log-stderr "Split into " (count chunks) " chunks")
               _ (doseq [[idx chunk] (map-indexed vector chunks)]
                   (log-stderr "  Chunk " (inc idx) ": " (count chunk) " characters"))
+              _ (log-stderr "\nChunk preview:")
+              _ (doseq [[idx chunk] (map-indexed vector chunks)]
+                  (let [preview (subs chunk 0 (min 100 (count chunk)))
+                        suffix (if (> (count chunk) 100) "..." "")]
+                    (log-stderr "--- Chunk " (inc idx) " ---")
+                    (log-stderr preview suffix)
+                    (log-stderr "")))
               results (if (= 1 (count server-urls))
                         (do
                           (log-stderr "Using single server: " (first server-urls))
@@ -225,8 +232,8 @@
           (when (:start-servers options)
             (stop-translation-servers)))
         (catch Exception e
+          (log-stderr "Error:" (.getMessage e))
           (binding [*out* *err*]
-            (println "Error:" (.getMessage e))
             (.printStackTrace e))
           (when (:start-servers options)
             (stop-translation-servers))
