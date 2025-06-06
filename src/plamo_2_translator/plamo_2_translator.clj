@@ -22,7 +22,9 @@
             (http/post (str url "/v1/chat/completions")
                       {:body (json/write-str
                               {:stop ["<|plamo:op|>"]
-                               :messages [{:role "user"
+                               :messages [{:role "system"
+                                           :content "英語を入力とするので、「ですます」調で日本語に翻訳してください。"}
+                                          {:role "user"
                                            :content "test"}]})
                        :headers {"Content-Type" "application/json"}
                        :throw-exceptions false
@@ -101,7 +103,9 @@
           response (http/post (str server-url "/v1/chat/completions")
                               {:body (json/write-str
                                       {:stop ["<|plamo:op|>"]
-                                       :messages [{:role "user"
+                                       :messages [{:role "system"
+                                                   :content "英語を入力とするので、「ですます」調で日本語に翻訳してください。"}
+                                                  {:role "user"
                                                    :content text}]})
                                :headers {"Content-Type" "application/json"}
                                :throw-exceptions false})]
