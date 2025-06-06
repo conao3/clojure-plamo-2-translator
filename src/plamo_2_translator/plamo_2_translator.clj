@@ -61,21 +61,44 @@
     (.waitFor process))
   (reset! server-processes {}))
 
-(defn- split-text [text max-chars]
-  (let [sentences (str/split text #"(?<=\.)(?:\s+|\n)")
-        chunks (reduce
-                (fn [acc sentence]
-                  (let [current (peek acc)]
-                    (if (< (+ (count current) (count sentence)) max-chars)
-                      (conj (pop acc) (str current " " sentence))
-                      (conj acc sentence))))
-                [""]
-                sentences)]
-    (filter #(not (str/blank? %)) chunks)))
+(defn- split-text-into-chunks [text max-chars num-servers]
+  (let [total-length (count text)
+        target-chunk-size (min max-chars (quot total-length num-servers))
+        sentences (str/split text #"(?<=\.)(?:\s+|\n)")
+        chunks (atom [])
+        current-chunk (atom "")]
+    (doseq [sentence sentences]
+      (let [current-length (count @current-chunk)
+            sentence-length (count sentence)]
+        (cond
+          (and (> current-length 0)
+               (> (+ current-length sentence-length 1) max-chars))
+          (do
+            (swap! chunks conj @current-chunk)
+            (reset! current-chunk sentence))
+          
+          (and (> current-length 0)
+               (>= (+ current-length sentence-length 1) target-chunk-size)
+               (< (count @chunks) (dec num-servers)))
+          (do
+            (swap! chunks conj (str @current-chunk " " sentence))
+            (reset! current-chunk ""))
+          
+          :else
+          (swap! current-chunk #(if (str/blank? %) sentence (str % " " sentence))))))
+    (when (not (str/blank? @current-chunk))
+      (swap! chunks conj @current-chunk))
+    (vec @chunks)))
 
-(defn- translate-chunk [server-url text]
+(defn- log-stderr [& messages]
+  (binding [*out* *err*]
+    (println (apply str messages))))
+
+(defn- translate-chunk [server-url text idx total]
+  (log-stderr "[" (inc idx) "/" total "] Translating " (count text) " characters with " server-url)
   (try
-    (let [response (http/post (str server-url "/v1/chat/completions")
+    (let [start-time (System/currentTimeMillis)
+          response (http/post (str server-url "/v1/chat/completions")
                               {:body (json/write-str
                                       {:stop ["<|plamo:op|>"]
                                        :messages [{:role "user"
@@ -83,33 +106,44 @@
                                :headers {"Content-Type" "application/json"}
                                :throw-exceptions false})]
       (if (= 200 (:status response))
-        (-> response
-            :body
-            json/read-str
-            (get-in ["choices" 0 "message" "content"])
-            str/trim)
+        (let [result (-> response
+                         :body
+                         json/read-str
+                         (get-in ["choices" 0 "message" "content"])
+                         str/trim)
+              elapsed (- (System/currentTimeMillis) start-time)]
+          (log-stderr "[" (inc idx) "/" total "] Completed in " elapsed "ms")
+          result)
         (throw (ex-info "Translation failed" {:status (:status response)
                                                :body (:body response)}))))
     (catch Exception e
       (throw (ex-info "Translation error" {:error (.getMessage e)})))))
 
 (defn- translate-parallel [server-urls chunks]
+  (log-stderr "Starting parallel translation with " (count server-urls) " servers...")
   (let [ch (async/chan)
         indexed-chunks (map-indexed vector chunks)]
     (doseq [[idx chunk] indexed-chunks]
       (let [server-url (nth server-urls (mod idx (count server-urls)))]
         (async/go
           (try
-            (let [result (translate-chunk server-url chunk)]
-              (async/>! ch {:index idx :result result}))
+            (let [result (translate-chunk server-url chunk idx (count chunks))]
+              (async/>! ch {:index idx :result result :server server-url :length (count chunk)}))
             (catch Exception e
               (async/>! ch {:index idx :error e}))))))
-    (let [results (atom {})]
+    (let [results (atom {})
+          server-stats (atom {})]
       (dotimes [_ (count chunks)]
-        (let [{:keys [index result error]} (async/<!! ch)]
+        (let [{:keys [index result error server length]} (async/<!! ch)]
           (if error
             (throw error)
-            (swap! results assoc index result))))
+            (do
+              (swap! results assoc index result)
+              (swap! server-stats update server (fnil + 0) length)))))
+      (log-stderr "\nTranslation summary:")
+      (doseq [[server chars] @server-stats]
+        (log-stderr "  " server ": " chars " characters"))
+      (log-stderr "")
       (map #(get @results %) (range (count chunks))))))
 
 (defn- setup-shutdown-hook []
@@ -137,10 +171,6 @@
    [nil "--start-servers" "Start translation servers automatically"]
    [nil "--server-urls URLS" "Comma-separated server URLs (when not starting servers)"
     :parse-fn #(str/split % #",")]
-   ["-c" "--chunk-size SIZE" "Maximum chunk size in characters"
-    :default 1000
-    :parse-fn #(Integer/parseInt %)
-    :validate [#(< 0 % 10000) "Must be between 1 and 9999"]]
    ["-h" "--help"]])
 
 (defn -main [& args]
@@ -180,9 +210,15 @@
                               (throw (ex-info "Multiple servers require --start-servers or --server-urls"
                                               {:options options}))))
               input-text (slurp *in*)
-              chunks (split-text input-text (:chunk-size options))
+              chunks (split-text-into-chunks input-text 5000 (count server-urls))
+              _ (log-stderr "Total text length: " (count input-text) " characters")
+              _ (log-stderr "Split into " (count chunks) " chunks")
+              _ (doseq [[idx chunk] (map-indexed vector chunks)]
+                  (log-stderr "  Chunk " (inc idx) ": " (count chunk) " characters"))
               results (if (= 1 (count server-urls))
-                        (map #(translate-chunk (first server-urls) %) chunks)
+                        (do
+                          (log-stderr "Using single server: " (first server-urls))
+                          (map-indexed #(translate-chunk (first server-urls) %2 %1 (count chunks)) chunks))
                         (translate-parallel server-urls chunks))]
           (doseq [result results]
             (println result))
