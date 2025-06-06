@@ -1,0 +1,12 @@
+{:deps
+ {org.clojure/clojure {:mvn/version "1.12.0"}
+  com.github.clj-easy/graal-build-time {:mvn/version "1.0.5"}}
+
+ :aliases
+ {:build {:deps {io.github.clojure/tools.build {:git/tag "v0.10.9" :git/sha "e405aac"}
+                 slipset/deps-deploy {:mvn/version "0.2.2"}}
+          :ns-default build
+          :build/project {:lib com.github.conao3/plamo-2-translator
+                          :main plamo-2-translator.plamo-2-translator
+                          :version "0.1.0"
+                          :license "Apache-2.0"}}}}
