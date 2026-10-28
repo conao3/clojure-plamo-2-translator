@@ -65,31 +65,31 @@
    ["-h" "--help"]])
 
 #_(defn -main [& args]
-  (let [{:keys [options errors summary]} (parse-opts args cli-options)]
-    (cond
-      (:help options)
-      (do
-        (log-stderr "Usage: plamo-2-translator [options]")
-        (log-stderr summary)
-        (System/exit 0))
+    (let [{:keys [options errors summary]} (parse-opts args cli-options)]
+      (cond
+        (:help options)
+        (do
+          (log-stderr "Usage: plamo-2-translator [options]")
+          (log-stderr summary)
+          (System/exit 0))
 
-      errors
-      (do
-        (doseq [err errors]
-          (log-stderr err))
-        (System/exit 1))
+        errors
+        (do
+          (doseq [err errors]
+            (log-stderr err))
+          (System/exit 1))
 
-      :else
-      (try
-        (let [server-url (:server options)]
-          (log-stderr "Using server: " server-url)
-          (log-stderr "Starting stream processing...")
-          (process-stream server-url))
-        (catch Exception e
-          (log-stderr "Error:" (.getMessage e))
-          (binding [*out* *err*]
-            (.printStackTrace e))
-          (System/exit 1))))))
+        :else
+        (try
+          (let [server-url (:server options)]
+            (log-stderr "Using server: " server-url)
+            (log-stderr "Starting stream processing...")
+            (process-stream server-url))
+          (catch Exception e
+            (log-stderr "Error:" (.getMessage e))
+            (binding [*out* *err*]
+              (.printStackTrace e))
+            (System/exit 1))))))
 
 (defn -main [& [server-url]]
   (let [res (http/post (str server-url "/v1/chat/completions")
